@@ -106,22 +106,97 @@
     let roomId = "";
     let role = "";
 
+    // 每個裝置/瀏覽器一個固定 ID，用來標記參與者
+    const clientId = (() => {
+    const key = "speedtest_client_id";
+    let v = localStorage.getItem(key);
+    if (!v) {
+        v = Math.random().toString(36).slice(2) + "_" + Date.now().toString(36);
+        localStorage.setItem(key, v);
+    }
+    return v;
+    })();
+
     const roomInput = document.getElementById("roomInput");
+    const pairSection = document.getElementById("pairSection");
+    const roleSection = document.getElementById("roleSection");
+    const startSection = document.getElementById("startSection");
+    const finishSection = document.getElementById("finishSection");
+
+    // 顯示狀態用（加在配對區下方）
+    let statusEl = document.getElementById("status");
+    if (!statusEl) {
+    statusEl = document.createElement("p");
+    statusEl.id = "status";
+    statusEl.style.opacity = "0.9";
+    statusEl.style.marginTop = "12px";
+    pairSection.appendChild(statusEl);
+    }
+    function setStatus(msg) {
+    statusEl.textContent = msg || "";
+    }
+
+    // 控制畫面切換
+    function show(section) {
+    pairSection.style.display = "none";
+    roleSection.style.display = "none";
+    startSection.style.display = "none";
+    finishSection.style.display = "none";
+    section.style.display = "block";
+    }
 
     /***********************
      * 配對
      ***********************/
-    document.getElementById("createRoom").onclick = () => {
-      roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-      roomInput.value = roomId;
+    document.getElementById("createRoom").onclick = async () => {
+    roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+    roomInput.value = roomId;
+
+    // 1) 在 Firebase 建立房間（這是 bug 的根本原因）
+    await db.ref(`rooms/${roomId}`).set({
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
+        hostId: clientId
+    });
+
+    // 2) 把自己加入 participants，並設定離線自動清除（可選但建議）
+    const meRef = db.ref(`rooms/${roomId}/participants/${clientId}`);
+    await meRef.set({
+        joinedAt: firebase.database.ServerValue.TIMESTAMP
+    });
+    meRef.onDisconnect().remove();
+
+    setStatus(`代碼已建立：${roomId}（等待另一台加入…）`);
+
+    // 3) 電腦端開始監聽「是否有人加入」，一旦有人加入就自動進下一步（解 Bug1）
+    watchParticipantsAndAutoAdvance();
     };
 
-    document.getElementById("joinRoom").onclick = () => {
-      roomId = roomInput.value.trim();
-      if (!roomId) return alert("請輸入代碼");
+    document.getElementById("joinRoom").onclick = async () => {
+    roomId = roomInput.value.trim().toUpperCase();
+    if (!roomId) return alert("請輸入代碼");
 
-      document.getElementById("pairSection").style.display = "none";
-      document.getElementById("roleSection").style.display = "block";
+    // 1) 先檢查房間是否存在（不存在就不放行）
+    const roomSnap = await db.ref(`rooms/${roomId}/createdAt`).get();
+    if (!roomSnap.exists()) {
+        setStatus(`找不到代碼：${roomId}（請確認對方已建立代碼）`);
+        alert("代碼不存在或尚未建立，請重新確認。");
+        return;
+    }
+
+    // 2) 房間存在 → 把自己寫入 participants
+    const meRef = db.ref(`rooms/${roomId}/participants/${clientId}`);
+    await meRef.set({
+        joinedAt: firebase.database.ServerValue.TIMESTAMP
+    });
+    meRef.onDisconnect().remove();
+
+    setStatus(`已加入房間：${roomId}`);
+
+    // 3) 加入者可直接進角色選擇
+    show(roleSection);
+
+    // 4) 同時也監聽人數（如果對方還沒準備好，也能同步狀態）
+    watchParticipantsAndAutoAdvance();
     };
 
     /***********************
@@ -165,6 +240,24 @@
       document.getElementById("result").innerText =
         `⏱ ${elapsed.toFixed(2)} 秒\n🚀 ${speed} m/s`;
     };
+
+    function watchParticipantsAndAutoAdvance() {
+  if (!roomId) return;
+
+  db.ref(`rooms/${roomId}/participants`).on("value", (snap) => {
+    const participants = snap.val() || {};
+    const count = Object.keys(participants).length;
+
+    // 顯示狀態（方便你測）
+    setStatus(`房間 ${roomId} 連線人數：${count}`);
+
+    // 只要偵測到 >=2 人，就自動進入角色選擇（電腦端就會自動跳，解 Bug1）
+    if (count >= 2) {
+      show(roleSection);
+    }
+  });
+}
+
   </script>
 
 </body>
