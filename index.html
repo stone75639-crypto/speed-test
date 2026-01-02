@@ -80,6 +80,9 @@
     <p id="roleHint" style="opacity:.85;">請先由其中一台選擇角色，另一台會自動分配到另一個角色。</p>
     <button class="primary" id="startRole">選擇：起跑端</button>
     <button class="primary" id="finishRole">選擇：終點端</button>
+    <br/>
+    <button class="primary" id="reselectRoleBtn">重新選擇身分</button>
+    <button class="primary" id="resetRunBtn">重新測試</button>
   </div>
 
   <!-- 起跑端 -->
@@ -242,7 +245,7 @@
       osc.type = "sine";
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.9, audioCtx.currentTime + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + durationMs / 1000);
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -251,13 +254,16 @@
     }
 
     document.getElementById("readyBtn").onclick = async () => {
+      // 確保音訊可播放（行動裝置常見 suspended 狀態）
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
       // 準備 / 預備（低音）
       beep(520, 120);
       await new Promise(r => setTimeout(r, 700));
       beep(520, 120);
       await new Promise(r => setTimeout(r, 700));
       // 起跑（高音）
-      beep(980, 160);
+      beep(980, 240);
       // 以伺服器時間設置起跑時間
       db.ref(`rooms/${roomId}/startTime`).set(firebase.database.ServerValue.TIMESTAMP);
     };
@@ -274,8 +280,11 @@
       const startTime = snap.val();
       const serverNow = Date.now() + serverOffsetMs;
       const elapsed = (serverNow - startTime) / 1000;
+      const dSnap = await db.ref(`rooms/${roomId}/distance`).get();
+      const dist = dSnap.exists() ? Number(dSnap.val()) : 100;
+      const speed = dist / elapsed; // m/s
       const lapRef = db.ref(`rooms/${roomId}/laps`).push();
-      await lapRef.set({ elapsed: Number(elapsed.toFixed(2)), serverNow: Math.round(serverNow) });
+      await lapRef.set({ elapsed: Number(elapsed.toFixed(2)), speed: Number(speed.toFixed(2)), serverNow: Math.round(serverNow) });
     };
 
     document.getElementById("stopBtn").onclick = async () => {
@@ -292,6 +301,7 @@
         `⏱ ${elapsed.toFixed(2)} 秒\n🚀 ${speed} m/s（距離 ${distance} m）`;
       document.getElementById("stopBtn").disabled = true;
       document.getElementById("lapBtn").disabled = true;
+      if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
     };
 
     function watchServerOffset() {
@@ -329,8 +339,56 @@
       if (arr.length === 0) { box.innerHTML = ""; return; }
       box.innerHTML = arr
         .sort((a,b) => (a.serverNow||0) - (b.serverNow||0))
-        .map((x, i) => `#${i+1}　${Number(x.elapsed||0).toFixed(2)} s`)
+        .map((x, i) => `#${i+1}　${Number(x.elapsed||0).toFixed(2)} s　(${Number(x.speed||0).toFixed(2)} m/s)`)
         .join("<br/>");
+    }
+
+    // 重新測試：清空跑步資料但保留 participants
+    async function resetRun() {
+      if (!roomId) return;
+      await db.ref(`rooms/${roomId}/startTime`).remove();
+      await db.ref(`rooms/${roomId}/finishTime`).remove();
+      await db.ref(`rooms/${roomId}/laps`).remove();
+      await db.ref(`rooms/${roomId}/roles`).remove();
+      document.getElementById("result").innerText = "";
+      const box = document.getElementById("lapsBox"); if (box) box.innerHTML = "";
+      document.getElementById("stopBtn").disabled = false;
+      document.getElementById("lapBtn").disabled = false;
+      if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+      show(roleSection);
+    }
+    document.getElementById("resetRunBtn").onclick = resetRun;
+
+    // 重新選擇身分：清空 roles 讓兩端回到角色選擇
+    document.getElementById("reselectRoleBtn").onclick = async () => {
+      if (!roomId) return;
+      await db.ref(`rooms/${roomId}/roles`).remove();
+    };
+
+    // 監聽 reset（roles 被移除視為重新測試切回初始狀態）
+    function watchResetRun() {
+      if (!roomId) return;
+      db.ref(`rooms/${roomId}/roles`).on("value", (snap) => {
+        if (!snap.exists()) {
+          role = "";
+          document.getElementById("result").innerText = "";
+          const box = document.getElementById("lapsBox"); if (box) box.innerHTML = "";
+          document.getElementById("stopBtn").disabled = false;
+          document.getElementById("lapBtn").disabled = false;
+          if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+          show(roleSection);
+        }
+      });
+    }
+
+    // 監聽 finishTime，若已存在就停止 live 計時（兩端同步）
+    function watchFinishStop() {
+      if (!roomId) return;
+      db.ref(`rooms/${roomId}/finishTime`).on("value", (snap) => {
+        if (snap.exists()) {
+          if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+        }
+      });
     }
 
     function watchLaps() {
@@ -433,6 +491,8 @@
           watchDistance();
           watchRoleAssignment();
           watchLaps();
+          watchResetRun();
+          watchFinishStop();
         }
       });
     }
