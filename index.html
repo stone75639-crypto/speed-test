@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>100 公尺短跑測速工具</title>
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont;
+      background: #111;
+      color: #fff;
+      text-align: center;
+      padding: 20px;
+    }
+    button {
+      font-size: 18px;
+      padding: 14px 28px;
+      margin: 10px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .primary {
+      background: #00c853;
+      color: #000;
+    }
+    .danger {
+      background: #ff5252;
+      color: #000;
+    }
+    input {
+      font-size: 18px;
+      padding: 10px;
+      width: 200px;
+      text-align: center;
+    }
+    .section {
+      margin-top: 30px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>🏃 100 公尺短跑測速</h1>
+
+  <!-- 配對區 -->
+  <div class="section" id="pairSection">
+    <p>配對代碼</p>
+    <input id="roomInput" placeholder="輸入或產生代碼" />
+    <br />
+    <button class="primary" id="createRoom">產生代碼</button>
+    <button class="primary" id="joinRoom">加入</button>
+  </div>
+
+  <!-- 角色選擇 -->
+  <div class="section" id="roleSection" style="display:none;">
+    <p>選擇角色</p>
+    <button class="primary" id="startRole">起跑端</button>
+    <button class="primary" id="finishRole">終點端</button>
+  </div>
+
+  <!-- 起跑端 -->
+  <div class="section" id="startSection" style="display:none;">
+    <h2>起跑端</h2>
+    <button class="primary" id="readyBtn">READY → SET → 🟢</button>
+  </div>
+
+  <!-- 終點端 -->
+  <div class="section" id="finishSection" style="display:none;">
+    <h2>終點端</h2>
+    <button class="danger" id="stopBtn">到達終點</button>
+    <p id="result"></p>
+  </div>
+
+  <!-- 哨音 -->
+  <audio id="beepSound">
+    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
+  </audio>
+
+  <!-- Firebase CDN（一定要用 compat） -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script>
+    /***********************
+     * Firebase 設定（你的）
+     ***********************/
+    const firebaseConfig = {
+      apiKey: "AIzaSyALxLJ1Jq4OYGLHcUhXouQnluobschD8-Q",
+      authDomain: "speedtest-1a8bf.firebaseapp.com",
+      databaseURL: "https://speedtest-1a8bf-default-rtdb.firebaseio.com",
+      projectId: "speedtest-1a8bf",
+      storageBucket: "speedtest-1a8bf.firebasestorage.app",
+      messagingSenderId: "291894125118",
+      appId: "1:291894125118:web:dd3433e2ba88ed6223a76f"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    /***********************
+     * 全域狀態
+     ***********************/
+    let roomId = "";
+    let role = "";
+
+    const roomInput = document.getElementById("roomInput");
+
+    /***********************
+     * 配對
+     ***********************/
+    document.getElementById("createRoom").onclick = () => {
+      roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+      roomInput.value = roomId;
+    };
+
+    document.getElementById("joinRoom").onclick = () => {
+      roomId = roomInput.value.trim();
+      if (!roomId) return alert("請輸入代碼");
+
+      document.getElementById("pairSection").style.display = "none";
+      document.getElementById("roleSection").style.display = "block";
+    };
+
+    /***********************
+     * 角色選擇
+     ***********************/
+    document.getElementById("startRole").onclick = () => {
+      role = "start";
+      document.getElementById("roleSection").style.display = "none";
+      document.getElementById("startSection").style.display = "block";
+    };
+
+    document.getElementById("finishRole").onclick = () => {
+      role = "finish";
+      document.getElementById("roleSection").style.display = "none";
+      document.getElementById("finishSection").style.display = "block";
+    };
+
+    /***********************
+     * 起跑端
+     ***********************/
+    document.getElementById("readyBtn").onclick = async () => {
+      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 800));
+      document.getElementById("beepSound").play();
+
+      db.ref(`rooms/${roomId}/startTime`).set(firebase.database.ServerValue.TIMESTAMP);
+    };
+
+    /***********************
+     * 終點端
+     ***********************/
+    document.getElementById("stopBtn").onclick = async () => {
+      const snap = await db.ref(`rooms/${roomId}/startTime`).get();
+      if (!snap.exists()) return alert("尚未起跑");
+
+      const startTime = snap.val();
+      const finishTime = Date.now();
+      const elapsed = (finishTime - startTime) / 1000;
+      const speed = (100 / elapsed).toFixed(2);
+
+      document.getElementById("result").innerText =
+        `⏱ ${elapsed.toFixed(2)} 秒\n🚀 ${speed} m/s`;
+    };
+  </script>
+
+</body>
+</html>
