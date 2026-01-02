@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>100 公尺短跑測速工具</title>
+  <title>短跑測試工具</title>
 
   <style>
     body {
@@ -38,12 +38,26 @@
     .section {
       margin-top: 30px;
     }
+    #stopBtn {
+      width: 92vw;
+      max-width: 520px;
+      font-size: 28px;
+      padding: 22px 18px;
+      border-radius: 14px;
+    }
+    #lapBtn {
+      width: 92vw;
+      max-width: 520px;
+      font-size: 20px;
+      padding: 14px 18px;
+      border-radius: 14px;
+    }
   </style>
 </head>
 
 <body>
 
-  <h1>🏃 100 公尺短跑測速</h1>
+  <h1>🏃 短跑測試</h1>
 
   <!-- 配對區 -->
   <div class="section" id="pairSection">
@@ -56,28 +70,40 @@
 
   <!-- 角色選擇 -->
   <div class="section" id="roleSection" style="display:none;">
-    <p>選擇角色</p>
-    <button class="primary" id="startRole">起跑端</button>
-    <button class="primary" id="finishRole">終點端</button>
+    <p>設定本次距離（公尺）</p>
+    <input id="distanceInput" type="number" min="1" step="1" value="100" style="width:220px;" />
+    <p style="opacity:.8; margin-top:8px;">（第一次設定會寫入房間，另一台會自動同步）</p>
+
+    <hr style="opacity:.2; margin:18px 0;" />
+
+    <p>角色分配</p>
+    <p id="roleHint" style="opacity:.85;">請先由其中一台選擇角色，另一台會自動分配到另一個角色。</p>
+    <button class="primary" id="startRole">選擇：起跑端</button>
+    <button class="primary" id="finishRole">選擇：終點端</button>
   </div>
 
   <!-- 起跑端 -->
   <div class="section" id="startSection" style="display:none;">
     <h2>起跑端</h2>
     <button class="primary" id="readyBtn">READY → SET → 🟢</button>
+    <p id="liveTimeStart" style="font-size:28px; margin-top:14px;">0.00 s</p>
+    <p id="netInfoStart" style="opacity:.85;">延遲/偏移：-- ms</p>
   </div>
 
   <!-- 終點端 -->
   <div class="section" id="finishSection" style="display:none;">
     <h2>終點端</h2>
     <button class="danger" id="stopBtn">到達終點</button>
+    <button class="primary" id="lapBtn">分圈（Lap）</button>
+
+    <p id="liveTimeFinish" style="font-size:28px; margin-top:14px;">0.00 s</p>
+    <p id="netInfoFinish" style="opacity:.85;">延遲/偏移：-- ms</p>
+
     <p id="result"></p>
+    <div id="lapsBox" style="max-width:420px; margin:12px auto; text-align:left;"></div>
   </div>
 
-  <!-- 哨音 -->
-  <audio id="beepSound">
-    <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
-  </audio>
+  <!-- 哨音移除，改用 Web Audio 在腳本中產生 -->
 
   <!-- Firebase CDN（一定要用 compat） -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -122,6 +148,8 @@
     const roleSection = document.getElementById("roleSection");
     const startSection = document.getElementById("startSection");
     const finishSection = document.getElementById("finishSection");
+    const distanceInput = document.getElementById("distanceInput");
+    const roleHint = document.getElementById("roleHint");
 
     // 顯示狀態用（加在配對區下方）
     let statusEl = document.getElementById("status");
@@ -200,63 +228,214 @@
     };
 
     /***********************
-     * 角色選擇
+     * 角色分配與距離同步由監聽函式處理（watchRoleAssignment / watchDistance）
      ***********************/
-    document.getElementById("startRole").onclick = () => {
-      role = "start";
-      document.getElementById("roleSection").style.display = "none";
-      document.getElementById("startSection").style.display = "block";
-    };
-
-    document.getElementById("finishRole").onclick = () => {
-      role = "finish";
-      document.getElementById("roleSection").style.display = "none";
-      document.getElementById("finishSection").style.display = "block";
-    };
 
     /***********************
-     * 起跑端
+     * 起跑端（Web Audio 嗶聲 + 以伺服器時間為基準）
      ***********************/
-    document.getElementById("readyBtn").onclick = async () => {
-      await new Promise(r => setTimeout(r, 800));
-      await new Promise(r => setTimeout(r, 800));
-      document.getElementById("beepSound").play();
+    let audioCtx = null;
+    function beep(freq = 600, durationMs = 120) {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durationMs / 1000 + 0.02);
+    }
 
+    document.getElementById("readyBtn").onclick = async () => {
+      // 準備 / 預備（低音）
+      beep(520, 120);
+      await new Promise(r => setTimeout(r, 700));
+      beep(520, 120);
+      await new Promise(r => setTimeout(r, 700));
+      // 起跑（高音）
+      beep(980, 160);
+      // 以伺服器時間設置起跑時間
       db.ref(`rooms/${roomId}/startTime`).set(firebase.database.ServerValue.TIMESTAMP);
     };
 
     /***********************
-     * 終點端
+     * 終點端（Lap 與到達終點）
      ***********************/
+    let serverOffsetMs = 0;
+    let liveTimer = null;
+
+    document.getElementById("lapBtn").onclick = async () => {
+      const snap = await db.ref(`rooms/${roomId}/startTime`).get();
+      if (!snap.exists()) return alert("尚未起跑");
+      const startTime = snap.val();
+      const serverNow = Date.now() + serverOffsetMs;
+      const elapsed = (serverNow - startTime) / 1000;
+      const lapRef = db.ref(`rooms/${roomId}/laps`).push();
+      await lapRef.set({ elapsed: Number(elapsed.toFixed(2)), serverNow: Math.round(serverNow) });
+    };
+
     document.getElementById("stopBtn").onclick = async () => {
       const snap = await db.ref(`rooms/${roomId}/startTime`).get();
       if (!snap.exists()) return alert("尚未起跑");
-
       const startTime = snap.val();
-      const finishTime = Date.now();
-      const elapsed = (finishTime - startTime) / 1000;
-      const speed = (100 / elapsed).toFixed(2);
-
+      const serverNow = Date.now() + serverOffsetMs;
+      const elapsed = (serverNow - startTime) / 1000;
+      const distSnap = await db.ref(`rooms/${roomId}/distance`).get();
+      const distance = distSnap.exists() ? Number(distSnap.val()) : 100;
+      const speed = (distance / elapsed).toFixed(2);
+      await db.ref(`rooms/${roomId}/finishTime`).set(Math.round(serverNow));
       document.getElementById("result").innerText =
-        `⏱ ${elapsed.toFixed(2)} 秒\n🚀 ${speed} m/s`;
+        `⏱ ${elapsed.toFixed(2)} 秒\n🚀 ${speed} m/s（距離 ${distance} m）`;
+      document.getElementById("stopBtn").disabled = true;
+      document.getElementById("lapBtn").disabled = true;
     };
 
-    function watchParticipantsAndAutoAdvance() {
-  if (!roomId) return;
-
-  db.ref(`rooms/${roomId}/participants`).on("value", (snap) => {
-    const participants = snap.val() || {};
-    const count = Object.keys(participants).length;
-
-    // 顯示狀態（方便你測）
-    setStatus(`房間 ${roomId} 連線人數：${count}`);
-
-    // 只要偵測到 >=2 人，就自動進入角色選擇（電腦端就會自動跳，解 Bug1）
-    if (count >= 2) {
-      show(roleSection);
+    function watchServerOffset() {
+      db.ref(".info/serverTimeOffset").on("value", (snap) => {
+        serverOffsetMs = snap.val() || 0;
+        const n1 = document.getElementById("netInfoStart");
+        const n2 = document.getElementById("netInfoFinish");
+        if (n1) n1.textContent = `延遲/偏移：${Math.round(serverOffsetMs)} ms`;
+        if (n2) n2.textContent = `延遲/偏移：${Math.round(serverOffsetMs)} ms`;
+      });
     }
-  });
-}
+
+    function startLiveClock() {
+      if (!roomId) return;
+      const startRef = db.ref(`rooms/${roomId}/startTime`);
+      startRef.on("value", (snap) => {
+        const t0 = snap.val();
+        if (!t0) return;
+        if (liveTimer) clearInterval(liveTimer);
+        liveTimer = setInterval(() => {
+          const serverNow = Date.now() + serverOffsetMs;
+          const elapsed = (serverNow - t0) / 1000;
+          const s1 = document.getElementById("liveTimeStart");
+          const s2 = document.getElementById("liveTimeFinish");
+          if (s1) s1.textContent = `${elapsed.toFixed(2)} s`;
+          if (s2) s2.textContent = `${elapsed.toFixed(2)} s`;
+        }, 50);
+      });
+    }
+
+    function renderLaps(laps) {
+      const box = document.getElementById("lapsBox");
+      if (!box) return;
+      const arr = laps ? Object.values(laps) : [];
+      if (arr.length === 0) { box.innerHTML = ""; return; }
+      box.innerHTML = arr
+        .sort((a,b) => (a.serverNow||0) - (b.serverNow||0))
+        .map((x, i) => `#${i+1}　${Number(x.elapsed||0).toFixed(2)} s`)
+        .join("<br/>");
+    }
+
+    function watchLaps() {
+      if (!roomId) return;
+      db.ref(`rooms/${roomId}/laps`).on("value", (snap) => renderLaps(snap.val()));
+    }
+
+    function watchDistance() {
+      if (!roomId) return;
+      const distRef = db.ref(`rooms/${roomId}/distance`);
+      // DB -> UI
+      distRef.on("value", (snap) => {
+        const v = snap.val();
+        if (v && Number.isFinite(v)) {
+          distanceInput.value = v;
+        }
+      });
+      // UI -> DB（第一次設定才寫入；已存在就不覆蓋）
+      distanceInput.addEventListener("change", async () => {
+        const v = Number(distanceInput.value);
+        if (!v || v <= 0) { alert("距離需為正整數"); return; }
+        const cur = await distRef.get();
+        if (!cur.exists()) {
+          await distRef.set(Math.round(v));
+          setStatus(`距離已設定為 ${Math.round(v)} m`);
+        } else {
+          setStatus(`距離已存在（${cur.val()} m），不覆蓋`);
+          distanceInput.value = cur.val();
+        }
+      }, { once: false });
+    }
+
+    function watchRoleAssignment() {
+      if (!roomId) return;
+      const startRef = db.ref(`rooms/${roomId}/roles/start`);
+      const finishRef = db.ref(`rooms/${roomId}/roles/finish`);
+
+      function applyRoleUI(newRole) {
+        role = newRole;
+        if (newRole === "start") {
+          show(startSection);
+        } else if (newRole === "finish") {
+          show(finishSection);
+        }
+      }
+
+      db.ref(`rooms/${roomId}/roles`).on("value", (snap) => {
+        const roles = snap.val() || {};
+        const s = roles.start || null;
+        const f = roles.finish || null;
+        if (s === clientId) applyRoleUI("start");
+        if (f === clientId) applyRoleUI("finish");
+        if (s && f) {
+          roleHint.textContent = "✅ 角色已分配完成";
+          document.getElementById("startRole").disabled = true;
+          document.getElementById("finishRole").disabled = true;
+        } else {
+          roleHint.textContent = "請先由其中一台選擇角色，另一台會自動分配到另一個角色。";
+        }
+      });
+
+      document.getElementById("startRole").onclick = async () => {
+        const s = await startRef.get();
+        if (s.exists() && s.val() !== clientId) { alert("起跑端已被另一台選走"); return; }
+        await startRef.set(clientId);
+        autoAssignOtherRole();
+      };
+      document.getElementById("finishRole").onclick = async () => {
+        const f = await finishRef.get();
+        if (f.exists() && f.val() !== clientId) { alert("終點端已被另一台選走"); return; }
+        await finishRef.set(clientId);
+        autoAssignOtherRole();
+      };
+
+      async function autoAssignOtherRole() {
+        const partSnap = await db.ref(`rooms/${roomId}/participants`).get();
+        const participants = partSnap.val() || {};
+        const ids = Object.keys(participants);
+        if (ids.length < 2) return;
+        const otherId = ids.find(id => id !== clientId);
+        if (!otherId) return;
+        const rolesSnap = await db.ref(`rooms/${roomId}/roles`).get();
+        const roles = rolesSnap.val() || {};
+        if (!roles.start) await startRef.set(otherId);
+        else if (!roles.finish) await finishRef.set(otherId);
+      }
+    }
+
+    function watchParticipantsAndAutoAdvance() {
+      if (!roomId) return;
+      db.ref(`rooms/${roomId}/participants`).on("value", (snap) => {
+        const participants = snap.val() || {};
+        const count = Object.keys(participants).length;
+        setStatus(`房間 ${roomId} 連線人數：${count}`);
+        if (count >= 2) {
+          show(roleSection);
+          // 兩端進入監聽：時間偏移、即時秒數、距離、角色、分圈
+          watchServerOffset();
+          startLiveClock();
+          watchDistance();
+          watchRoleAssignment();
+          watchLaps();
+        }
+      });
+    }
 
   </script>
 
